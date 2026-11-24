@@ -9,6 +9,7 @@ DisplayVolume 是一个适用于 Apple Silicon Mac 的后台工具。把支持 D
 ### 功能
 
 - 短按音量键调一档，长按连续调节，松开即停。
+- 显示器仍为声音输出时，键盘断开再连接后会自动恢复音量键。
 - 音量分为 16 档，采用指数曲线。低音量区的步距较小，高音量区逐渐拉开。0 档为静音。
 - 浮层显示当前档位，音量条会滑动填充或收回。减到 0 时，扬声器图标过渡到静音状态。
 - 安装后可随 macOS 登录启动。切换到其他声音输出、锁屏或退出时，程序释放它安装的键盘映射。
@@ -106,6 +107,7 @@ DisplayVolume is a background utility for Apple silicon Macs. Select an external
 ### Features
 
 - Tap to move one step. Hold to repeat and release to stop.
+- Volume keys resume automatically when a keyboard reconnects while the display is the active sound output.
 - Use a 16-step exponential volume curve with finer changes at quiet levels and wider changes toward the top. Step zero is mute.
 - See the active step in the on-screen display. The fill slides as volume changes, and the speaker icon animates into its muted state at zero.
 - Start at macOS login after installation. The utility releases its key mappings when the audio output changes, the session locks, or the app exits.

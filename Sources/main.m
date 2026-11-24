@@ -99,7 +99,6 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
     MonitorConnection *_monitor;
     AudioDeviceID _discoveryOutput;
     NSTimeInterval _discoverAfter;
-    IOHIDEventSystemClientRef _hid;
     EventHotKeyRef _hotkeys[KeyCount];
     BOOL _listening, _suspended, _refreshing;
     NSMutableDictionary<NSString *, NSNumber *> *_lastAudibleLevels;
@@ -121,9 +120,17 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
 }
 
 - (void)updateMappings:(BOOL)install {
-    if (!_hid || (!install && _journal.count == 0)) return;
-    CFArrayRef services = IOHIDEventSystemClientCopyServices(_hid);
-    if (!services) return;
+    if (!install && _journal.count == 0) return;
+
+    // A simple client can retain the service list it saw before a keyboard
+    // reconnected. Use a fresh client so new registry IDs can be mapped.
+    IOHIDEventSystemClientRef hid = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault);
+    if (!hid) return;
+    CFArrayRef services = IOHIDEventSystemClientCopyServices(hid);
+    if (!services) {
+        CFRelease(hid);
+        return;
+    }
     NSArray *additions = volumeMappings();
     const NSSet *usedSources = [NSSet setWithArray:[additions valueForKey:Source]];
     const NSSet *usedDestinations = [NSSet setWithArray:[additions valueForKey:Destination]];
@@ -179,11 +186,19 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
         installed++;
     }
     CFRelease(services);
+    CFRelease(hid);
+    BOOL keyboardRemoved = NO;
     for (NSString *identifier in _journal.allKeys) {
         if (![present containsObject:identifier]) {
             [_journal removeObjectForKey:identifier];
-            [self saveJournal];
+            keyboardRemoved = YES;
         }
+    }
+    if (keyboardRemoved) {
+        // A disconnected keyboard may never deliver the key-up event.
+        [self stopKeyRepeat];
+        _heldKeys = 0;
+        [self saveJournal];
     }
     if (installed) os_log(_log, "Volume keys configured on %lu keyboard services", (unsigned long)installed);
 }
@@ -219,7 +234,7 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
     }
 
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    if (output != kAudioObjectUnknown && !_listening && _hid && _boot && _journalURL &&
+    if (output != kAudioObjectUnknown && !_listening && _boot && _journalURL &&
         now >= _discoverAfter) {
         uint16_t value, maximum;
         _discoverAfter = now + 8;
@@ -336,7 +351,6 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     _log = os_log_create(Domain.UTF8String, "volume");
     _lastAudibleLevels = [NSMutableDictionary dictionary];
-    _hid = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault);
     _boot = bootIdentifier();
 
     NSFileManager *files = NSFileManager.defaultManager;
@@ -406,7 +420,6 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
 - (void)applicationWillTerminate:(NSNotification *)notification {
     [_timer invalidate];
     [self deactivate];
-    if (_hid) CFRelease(_hid);
 }
 @end
 
