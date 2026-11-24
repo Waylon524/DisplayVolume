@@ -4,7 +4,7 @@
 
 ## 简体中文
 
-DisplayVolume 是一个适用于 Apple Silicon Mac 的后台工具。把未来视野 RV200 Ultra 选为声音输出后，可以用键盘上的音量加、减和静音键，通过 DDC/CI 调节显示器的硬件音量。调节时，显示器右上角会短暂出现音量浮层。
+DisplayVolume 是一个适用于 Apple Silicon Mac 的后台工具。把支持 DDC/CI 硬件音量的外接显示器选为声音输出后，可以用键盘上的音量加、减和静音键调节它。调节时，目标显示器右上角会短暂出现音量浮层。
 
 ### 功能
 
@@ -22,8 +22,11 @@ DisplayVolume 是一个适用于 Apple Silicon Mac 的后台工具。把未来�
 | 处理器 | Apple Silicon |
 | 系统 | 部署目标为 macOS 13 或更新版本 |
 | 构建工具 | 带 macOS 26 SDK 或更新 SDK 的 Xcode 或 Command Line Tools |
-| 显示器 | 当前识别 RV200 Ultra，要求它是唯一匹配的在线显示器，并选为当前声音输出 |
-| 实测环境 | M5 MacBook Air、macOS 27.3、RV200 Ultra，音频传输类型为 DisplayPort |
+| 音频输出 | macOS 识别为 DisplayPort（包括使用 DisplayPort Alt Mode 的 USB-C 连接）或 HDMI 的显示器输出 |
+| 显示器和连接 | 系统能将当前声音输出唯一对应到目标显示器，且连接支持 DDC/CI 扬声器音量的读写（VCP `0x62`） |
+| 已实测的硬件 | M5 MacBook Air、macOS 27.3、RV200 Ultra，走 DisplayPort 音频 |
+
+多屏时，程序用当前声音输出的名称、系统显示器名称和 EDID 来匹配目标。无法唯一匹配时，音量键由 macOS 处理。DisplayPort 能传输声音，硬件调音还需要显示器和连接链路提供 DDC/CI 扬声器音量控制。
 
 macOS 26 及以上版本使用 AppKit 的透明 Liquid Glass 材质。较早版本使用 AppKit 的半透明浮层材质。DDC 传输依赖 macOS 的私有 `IOAVService` 接口，兼容性取决于 macOS 版本、显示器固件和连接方式。
 
@@ -37,7 +40,7 @@ cd DisplayVolume
 ./script/build_and_run.sh --install
 ```
 
-脚本会构建并本地签名应用，将它安装到 `/Applications/DisplayVolume.app`，启动后台进程并注册登录项。安装后，在「系统设置 → 声音 → 输出」选择 **RV200 Ultra**。若同时运行 BetterDisplay、MonitorControl 或其他处理媒体键的工具，先退出相应工具，再测试 DisplayVolume。
+脚本会构建并本地签名应用，将它安装到 `/Applications/DisplayVolume.app`，启动后台进程并注册登录项。安装后，在「系统设置 → 声音 → 输出」选择目标显示器。若同时运行 BetterDisplay、MonitorControl 或其他处理媒体键的工具，先退出相应工具，再测试 DisplayVolume。
 
 从同一份工作目录更新时，拉取最新版并再次运行安装脚本。
 
@@ -55,7 +58,7 @@ git pull --ff-only
 # 构建并从临时目录启动应用
 ./script/build_and_run.sh
 
-# 读取当前 RV200 Ultra 的硬件音量
+# 读取当前显示器输出的硬件音量
 /Applications/DisplayVolume.app/Contents/MacOS/DisplayVolume --probe
 
 # 查看登录项状态
@@ -68,7 +71,7 @@ git pull --ff-only
 | 现象 | 检查方法 |
 | --- | --- |
 | macOS 的输出音量滑块呈灰色 | DisplayPort 输出的系统音量控件可能不可用。用键盘音量键调节并观察 DisplayVolume 浮层，或用 `--probe` 读取硬件音量。 |
-| `--probe` 无法读取音量 | 确认 RV200 Ultra 已连接并选为当前声音输出。再检查连接链路是否支持 DDC/CI。 |
+| `--probe` 无法读取音量 | 确认显示器已选为声音输出。检查显示器是否支持 DDC/CI 音量，扩展坞或转接器是否转发 DDC/CI。若提示目标不唯一，可先只连接要调节的显示器再试。 |
 | 探测成功，按键无反应 | 确认按下的是媒体音量键，并检查是否有其他应用处理相同按键。DisplayVolume 将音量键映射到 F16、F17、F18，遇到已有冲突映射时会跳过对应键盘服务。 |
 | 登录后未启动 | 在「系统设置 → 通用 → 登录项与扩展」查看 DisplayVolume，或运行 `--login-status` 确认状态。 |
 
@@ -98,7 +101,7 @@ git pull --ff-only
 
 ## English
 
-DisplayVolume is a background utility for Apple silicon Macs. When the RICH VISION RV200 Ultra is selected as the sound output, the keyboard’s volume up, volume down, and mute keys adjust the monitor’s hardware volume over DDC/CI. A brief on-screen display appears in the monitor’s upper-right corner.
+DisplayVolume is a background utility for Apple silicon Macs. Select an external display with DDC/CI speaker volume as the sound output, then use the keyboard’s volume up, volume down, and mute keys to adjust its hardware volume. A brief on-screen display appears in the target monitor’s upper-right corner.
 
 ### Features
 
@@ -116,8 +119,11 @@ On a display reporting a hardware range of 0–100, steps 4, 8, 12, and 16 write
 | Processor | Apple silicon |
 | Operating system | Deployment target of macOS 13 or later |
 | Build tools | Xcode or Command Line Tools with the macOS 26 SDK or later |
-| Monitor | The RV200 Ultra must be the single matching online display and the selected sound output |
-| Tested setup | M5 MacBook Air, macOS 27.3, and RV200 Ultra with DisplayPort audio |
+| Audio output | A display that macOS reports as using DisplayPort (including USB-C with DisplayPort Alt Mode) or HDMI audio |
+| Display and connection | A unique match for the selected output, with readable and writable DDC/CI speaker volume (VCP `0x62`) |
+| Hardware tested | M5 MacBook Air, macOS 27.3, and RV200 Ultra with DisplayPort audio |
+
+With multiple displays connected, the app matches the selected audio output using audio and display names and EDID. macOS retains the media keys when the match is ambiguous. DisplayPort carries audio independently of monitor volume control, which requires speaker-volume support over DDC/CI on the display and connection.
 
 The overlay uses AppKit’s clear Liquid Glass material on macOS 26 and later and a translucent AppKit material on earlier versions. DDC transport uses macOS’s private `IOAVService` interface, so compatibility depends on the macOS version, monitor firmware, and connection.
 
@@ -131,7 +137,7 @@ cd DisplayVolume
 ./script/build_and_run.sh --install
 ```
 
-The script builds and locally signs the app, installs it at `/Applications/DisplayVolume.app`, starts the background process, and registers the login item. In **System Settings → Sound → Output**, select **RV200 Ultra**. Quit BetterDisplay, MonitorControl, or any other utility handling the same media keys before testing DisplayVolume.
+The script builds and locally signs the app, installs it at `/Applications/DisplayVolume.app`, starts the background process, and registers the login item. In **System Settings → Sound → Output**, select the target display. Quit BetterDisplay, MonitorControl, or any other utility handling the same media keys before testing DisplayVolume.
 
 To update an existing checkout, pull the latest changes and run the installer again.
 
@@ -149,7 +155,7 @@ git pull --ff-only
 # Build and launch from the temporary directory
 ./script/build_and_run.sh
 
-# Read the current RV200 Ultra hardware volume
+# Read the selected display output's hardware volume
 /Applications/DisplayVolume.app/Contents/MacOS/DisplayVolume --probe
 
 # Check the login item status
@@ -162,7 +168,7 @@ git pull --ff-only
 | Symptom | What to check |
 | --- | --- |
 | The macOS output slider is dimmed | The system volume control can be unavailable for DisplayPort audio. Use the media keys and look for the DisplayVolume overlay, or read the hardware level with `--probe`. |
-| `--probe` cannot read the volume | Confirm that the RV200 Ultra is connected and selected as the sound output. Check that the connection supports DDC/CI. |
+| `--probe` cannot read the volume | Select the display as the sound output. Check that the monitor exposes DDC/CI volume and that any dock or adapter passes DDC/CI through. If the tool reports an ambiguous match, try connecting the target display by itself. |
 | The probe succeeds, and the keys have no effect | Confirm that the keyboard sends media volume controls. Check whether another app handles the same keys. DisplayVolume maps the controls to F16, F17, and F18 and skips keyboard services with conflicting mappings. |
 | The app did not start at login | Check **System Settings → General → Login Items & Extensions**, or run `--login-status`. |
 

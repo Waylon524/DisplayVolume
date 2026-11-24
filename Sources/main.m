@@ -96,11 +96,13 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
 }
 
 @implementation DisplayVolume {
-    CFTypeRef _monitor;
+    MonitorConnection *_monitor;
+    AudioDeviceID _discoveryOutput;
+    NSTimeInterval _discoverAfter;
     IOHIDEventSystemClientRef _hid;
     EventHotKeyRef _hotkeys[KeyCount];
     BOOL _listening, _suspended, _refreshing;
-    NSUInteger _lastAudibleLevel;
+    NSMutableDictionary<NSString *, NSNumber *> *_lastAudibleLevels;
     VolumeHUD *_hud;
     os_log_t _log;
     NSTimer *_timer;
@@ -195,10 +197,7 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
         if (_hotkeys[index]) UnregisterEventHotKey(_hotkeys[index]);
         _hotkeys[index] = NULL;
     }
-    if (_monitor) {
-        CFRelease(_monitor);
-        _monitor = NULL;
-    }
+    _monitor = nil;
     if (_listening) os_log(_log, "Volume keys returned to macOS");
     _listening = NO;
 }
@@ -208,13 +207,24 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
     _refreshing = YES;
     NSDictionary *session = CFBridgingRelease(CGSessionCopyCurrentDictionary());
     BOOL active = !_suspended && session && ![session[@"CGSSessionScreenIsLocked"] boolValue] &&
-                  [session[(__bridge NSString *)kCGSessionOnConsoleKey] boolValue] && MonitorSelectedDisplay();
-    if (!active) {
+                  [session[(__bridge NSString *)kCGSessionOnConsoleKey] boolValue];
+    AudioDeviceID output = active ? MonitorSelectedOutput() : kAudioObjectUnknown;
+    if (output == kAudioObjectUnknown ||
+        (_monitor && (output != _monitor.output || !CGDisplayIsOnline(_monitor.display)))) {
         [self deactivate];
-    } else if (!_listening && _hid && _boot && _journalURL) {
+    }
+    if (output != _discoveryOutput) {
+        _discoveryOutput = output;
+        _discoverAfter = 0;
+    }
+
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (output != kAudioObjectUnknown && !_listening && _hid && _boot && _journalURL &&
+        now >= _discoverAfter) {
         uint16_t value, maximum;
-        _monitor = MonitorOpen();
-        if (_monitor && MonitorRead(_monitor, &value, &maximum)) {
+        _discoverAfter = now + 8;
+        _monitor = [MonitorConnection connectToOutput:output reason:NULL];
+        if ([_monitor readVolume:&value maximum:&maximum] && [_monitor isCurrent]) {
             const UInt32 codes[KeyCount] = {kVK_F16, kVK_F17, kVK_F18};
             for (UInt32 index = 0; index < KeyCount; index++) {
                 EventHotKeyID key = {HotKeySignature, index};
@@ -226,7 +236,7 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
             _listening = _hotkeys[KeyCount - 1] != NULL;
         }
         if (_listening) {
-            os_log(_log, "RV200 Ultra selected; hardware volume %u/%u", value, maximum);
+            os_log(_log, "Display audio selected: %{public}@, hardware volume %u/%u", _monitor.name, value, maximum);
         } else {
             [self deactivate];
         }
@@ -264,20 +274,21 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
 }
 
 - (BOOL)adjustAndCanRepeat:(enum VolumeKey)key {
-    CGDirectDisplayID display = _listening ? MonitorSelectedDisplay() : kCGNullDirectDisplay;
-    if (!display) {
+    MonitorConnection *monitor = _monitor;
+    if (!_listening || ![monitor isCurrent]) {
         [self deactivate];
         return NO;
     }
     uint16_t value, maximum;
-    if (!MonitorRead(_monitor, &value, &maximum)) {
+    if (![monitor readVolume:&value maximum:&maximum]) {
         [self deactivate];
         return NO;
     }
     uint16_t steps[VolumeLevelCount + 1];
     makeVolumeSteps(maximum, steps);
+    NSString *memoryKey = monitor.volumeMemoryKey;
     NSUInteger previousLevel = nearestVolumeLevel(value, steps);
-    if (previousLevel) _lastAudibleLevel = previousLevel;
+    if (previousLevel) _lastAudibleLevels[memoryKey] = @(previousLevel);
     NSUInteger level = 0;
     switch (key) {
         case DownKey:
@@ -288,19 +299,20 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
             while (level < VolumeLevelCount && steps[level] <= value) level++;
             break;
         case MuteKey:
-            level = value ? 0 : (_lastAudibleLevel ?: 4);
+            level = value ? 0 : (_lastAudibleLevels[memoryKey].unsignedIntegerValue ?: 4);
             break;
         case KeyCount: return NO;
     }
     uint16_t next = steps[level];
-    if (next != value && !MonitorWrite(_monitor, next)) {
+    if (![monitor isCurrent] || (next != value && ![monitor writeVolume:next])) {
         [self deactivate];
         return NO;
     }
-    if (next) _lastAudibleLevel = level;
-    if (next != value) os_log(_log, "RV200 Ultra volume %u -> %u", value, next);
+    if (next) _lastAudibleLevels[memoryKey] = @(level);
+    if (next != value) os_log(_log, "Display audio %{public}@ volume %u -> %u", monitor.name, value, next);
     if (!_hud) _hud = [VolumeHUD new];
-    [_hud showLevel:level previousLevel:previousLevel onDisplay:display];
+    CGDirectDisplayID mirroredTo = CGDisplayMirrorsDisplay(monitor.display);
+    [_hud showLevel:level previousLevel:previousLevel onDisplay:mirroredTo ?: monitor.display];
     return (key == DownKey && level > 0) || (key == UpKey && level < VolumeLevelCount);
 }
 
@@ -311,16 +323,19 @@ static OSStatus volumeKeyEvent(EventHandlerCallRef next, EventRef event, void *c
 
 - (void)resume:(NSNotification *)notification {
     _suspended = NO;
+    _discoverAfter = 0;
     [self refresh];
 }
 
 - (void)displayChanged:(NSNotification *)notification {
     [self deactivate];
+    _discoverAfter = 0;
     [self refresh];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     _log = os_log_create(Domain.UTF8String, "volume");
+    _lastAudibleLevels = [NSMutableDictionary dictionary];
     _hid = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault);
     _boot = bootIdentifier();
 
@@ -425,13 +440,24 @@ int main(int argc, const char *argv[]) {
                 return loginItem(action);
             }
             if ([action isEqualToString:@"--probe"]) {
-                CFTypeRef monitor = MonitorOpen();
+                AudioDeviceID output = MonitorSelectedOutput();
+                if (output == kAudioObjectUnknown) {
+                    puts("Select a DisplayPort or HDMI display as the macOS sound output.");
+                    return EXIT_FAILURE;
+                }
+                NSString *reason = nil;
+                MonitorConnection *monitor = [MonitorConnection connectToOutput:output reason:&reason];
+                if (!monitor) {
+                    puts(reason.UTF8String);
+                    return EXIT_FAILURE;
+                }
                 uint16_t volume, maximum;
-                BOOL ready = monitor && MonitorRead(monitor, &volume, &maximum);
-                if (monitor) CFRelease(monitor);
-                if (ready) printf("RV200 Ultra: %u/%u\n", volume, maximum);
-                else puts("RV200 Ultra is not the active DDC-capable output.");
-                return ready ? EXIT_SUCCESS : EXIT_FAILURE;
+                if (![monitor readVolume:&volume maximum:&maximum] || ![monitor isCurrent]) {
+                    printf("%s did not return readable DDC/CI speaker volume (VCP 0x62).\n", monitor.name.UTF8String);
+                    return EXIT_FAILURE;
+                }
+                printf("%s: %u/%u\n", monitor.name.UTF8String, volume, maximum);
+                return EXIT_SUCCESS;
             }
         }
 
